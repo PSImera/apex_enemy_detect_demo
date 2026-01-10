@@ -1,0 +1,4 @@
+[server]
+maxUploadSize = 1024
+# Configuration to bypass the default 200MB upload limit
+# server.maxUploadSize: Max size in MB for file uploads via st.file_uploader
