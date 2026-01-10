@@ -20,21 +20,19 @@ tasks_status = {}
 
 
 def worker_loop():
+    """main worker queue loop"""
     while True:
-        # Берем задачу из очереди (блокируется, пока задач нет)
         task_data = task_queue.get()
         if task_data is None:
-            break  # Сигнал для остановки
+            break
 
         task_id = task_data["task_id"]
         try:
-            # Запускаем твою тяжелую функцию обработки
             process_video_with_tracking(**task_data["params"])
         except Exception as e:
             print(f"Error in worker: {e}")
             tasks_status[task_id]["status"] = "error"
         finally:
-            # Помечаем, что задача извлечена и обработана
             task_queue.task_done()
 
 

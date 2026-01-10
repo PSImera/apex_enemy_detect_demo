@@ -126,7 +126,7 @@ fix_sync = st.sidebar.checkbox(
     "Adds extra processing time at the start.",
 )
 
-
+# Upload and show video
 uploaded_file = st.file_uploader(
     "Upload video",
     type=["mp4", "avi", "mov", "mkv"],
@@ -136,11 +136,9 @@ if uploaded_file:
     st.subheader("Original Video")
     st.video(uploaded_file)
 
-# Кнопка запуска
+# Start detection button
 if st.button("Detect", disabled=uploaded_file is None):
-    # Очищаем старые данные перед новым запуском
     st.session_state.processed_video = None
-
     files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
     data = {
         "model_choice": model_choice,
@@ -154,19 +152,57 @@ if st.button("Detect", disabled=uploaded_file is None):
 
     try:
         response = requests.post(
-            f"{BACKEND_URL}/upload",
-            files=files,
-            data=data,
-            timeout=60,
+            f"{BACKEND_URL}/upload", files=files, data=data, timeout=60
         )
+
         if response.status_code == 200:
-            st.session_state.task_id = response.json()["task_id"]
+            task_id = response.json()["task_id"]
+            st.session_state.task_id = task_id
+
+            progress_container = st.container()
+            with progress_container:
+                status_text = st.empty()
+                progress_bar = st.progress(0)
+
+                finished = False
+                while not finished:
+                    try:
+                        status_res = requests.get(
+                            f"{BACKEND_URL}/status/{task_id}"
+                        ).json()
+                        state = status_res.get("status")
+                        progress = status_res.get("progress", 0)
+                        message = status_res.get("message", "Waiting...")
+
+                        if state == "repairing":
+                            status_text.warning(f"🛠️ **Repairing:** {message}")
+                            progress_bar.progress(progress)
+                        elif state == "processing":
+                            status_text.info(f"🔍 **Processing:** {message}")
+                            progress_bar.progress(progress)
+                        elif state == "merging":
+                            status_text.info(f"🎵 **Merging Audio:** {message}")
+                            progress_bar.progress(99)
+                        elif state == "done":
+                            status_text.success("✅ **Success!** Video is ready.")
+                            progress_bar.progress(100)
+                            finished = True
+                        elif state == "failed":
+                            st.error(f"❌ Error: {status_res.get('message')}")
+                            finished = True
+
+                        if not finished:
+                            time.sleep(1)
+                    except Exception as poll_error:
+                        st.warning(f"Connection lost, retrying... ({poll_error})")
+                        time.sleep(2)
+
         else:
-            st.error("Upload failed")
+            st.error(f"Upload failed: {response.text}")
     except Exception as e:
         st.error(f"Error: {e}")
 
-# 2. Логика отслеживания (вынесена из блока кнопки!)
+# Progress bar status
 if st.session_state.task_id and st.session_state.processed_video is None:
     status_placeholder = st.empty()
     progress_bar = st.progress(0)
@@ -184,9 +220,8 @@ if st.session_state.task_id and st.session_state.processed_video is None:
             if status == "done":
                 res = requests.get(f"{BACKEND_URL}/result/{st.session_state.task_id}")
                 if res.status_code == 200:
-                    # СОХРАНЯЕМ В ПАМЯТЬ
                     st.session_state.processed_video = res.content
-                    st.rerun()  # Заставляем Streamlit перерисовать страницу, чтобы появился плеер
+                    st.rerun()
                 else:
                     st.error(f"Error getting result: {res.text}")
                 stop_polling = True
@@ -198,14 +233,11 @@ if st.session_state.task_id and st.session_state.processed_video is None:
             break
         time.sleep(1)
 
-# 3. Отображение результата (ВСЕГДА выполняется, если в памяти есть видео)
+# Show result
 if st.session_state.processed_video:
     st.markdown("---")
     st.subheader("Result Video")
-
-    # Прямое проигрывание из байтов
     st.video(st.session_state.processed_video)
-
     st.download_button(
         label="⬇️ Download result",
         data=st.session_state.processed_video,

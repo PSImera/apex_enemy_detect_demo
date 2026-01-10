@@ -11,14 +11,13 @@ from backend.models import get_model
 def draw_rounded_rect(
     img, pt1, pt2, color, thickness=1, radius=15, alpha_fill=0.05, label=None
 ):
-    """Рисует скруглённый прямоугольник с полупрозрачной заливкой и подписью"""
+    """Draws a rounded rectangle with a translucent fill and a caption."""
     overlay = img.copy()
     x0, y0 = pt1
     x1, y1 = pt2
 
-    # --- скруглённая заливка ---
+    # --- fill ---
     if radius > 0:
-        # четыре угла
         cv2.ellipse(
             overlay, (x0 + radius, y0 + radius), (radius, radius), 180, 0, 90, color, -1
         )
@@ -31,16 +30,15 @@ def draw_rounded_rect(
         cv2.ellipse(
             overlay, (x1 - radius, y1 - radius), (radius, radius), 0, 0, 90, color, -1
         )
-        # соединяем углы линиями
         cv2.rectangle(overlay, (x0 + radius, y0), (x1 - radius, y1), color, -1)
         cv2.rectangle(overlay, (x0, y0 + radius), (x1, y1 - radius), color, -1)
     else:
         cv2.rectangle(overlay, (x0, y0), (x1, y1), color, -1)
 
-    # применяем прозрачность
+    # search area fill transperency
     img = cv2.addWeighted(overlay, alpha_fill, img, 1 - alpha_fill, 0)
 
-    # --- рамка с теми же скруглёнными углами ---
+    # --- boarder ---
     if radius > 0:
         cv2.ellipse(
             img,
@@ -89,14 +87,14 @@ def draw_rounded_rect(
     else:
         cv2.rectangle(img, pt1, pt2, color, thickness)
 
-    # --- подпись без прямоугольника, моноширный, цвет как рамки ---
+    # --- caption ---
     if label:
         font_scale = 0.5
         font_thick = 1
-        font = cv2.FONT_HERSHEY_SIMPLEX  # моноширный стандартный
+        font = cv2.FONT_HERSHEY_SIMPLEX
         text_size = cv2.getTextSize(label, font, font_scale, font_thick)[0]
         text_x = x0 + (x1 - x0 - text_size[0]) // 2
-        text_y = y0 - 5  # чуть выше верхней границы
+        text_y = y0 - 5
         cv2.putText(img, label, (text_x, text_y), font, font_scale, color, font_thick)
 
     return img
@@ -116,14 +114,14 @@ def process_video_with_tracking(
     show_video=False,
     fix_sync=False,
 ):
-    # Создаем временный путь для видео без звука
+    # temp path for save sound
     abs_input = str(Path(input_path).resolve())
     abs_output = str(Path(output_path).resolve())
     temp_output = abs_output.replace(".mp4", "_nosound.mp4")
 
-    tasks_status[task_id]["result"] = abs_output
-    tasks_status[task_id]["status"] = "processing"
-    tasks_status[task_id]["progress"] = 0
+    tasks_status[task_id].update(
+        {"status": "starting", "result": abs_output, "progress": 0}
+    )
 
     try:
         # for fps
@@ -131,7 +129,9 @@ def process_video_with_tracking(
         prev_time = time.perf_counter()
 
         if fix_sync:
-            tasks_status[task_id]["status"] = "repairing video..."
+            tasks_status[task_id].update(
+                {"status": "repairing", "message": "Fixing audio sync... Please wait."}
+            )
 
             fixed_input = str(input_path).replace(".mp4", "_fixed.mp4")
 
@@ -141,22 +141,26 @@ def process_video_with_tracking(
                 "-i",
                 abs_input,
                 "-filter_complex",
-                "[0:v]fps=fps=60[v]",  # Создаем поток [v] с 60 FPS
+                "[0:v]fps=fps=60[v]",
                 "-map",
-                "[v]",  # Явно берем видео из фильтра
+                "[v]",
                 "-map",
-                "0:a?",  # Берем все аудиодорожки (если есть)
+                "0:a?",
                 "-c:v",
                 "libx264",
                 "-preset",
                 "ultrafast",
                 "-c:a",
-                "copy",  # Копируем аудио без перекодирования
+                "copy",
                 fixed_input,
             ]
 
             subprocess.run(repair_cmd, check=True)
             abs_input = fixed_input
+
+        tasks_status[task_id].update(
+            {"status": "processing", "message": "Initializing model and video..."}
+        )
 
         cap = cv2.VideoCapture(abs_input)
         if not cap.isOpened():
@@ -203,8 +207,9 @@ def process_video_with_tracking(
         final_crop_w = x1_orig - x0_orig
         final_crop_h = y1_orig - y0_orig
 
-        frame_count = 0
-        while True:
+        class_names = model.names
+        for frame_idx in range(total_frames):
+
             now = time.perf_counter()
             fps_window.append(1.0 / (now - prev_time))
             prev_time = now
@@ -214,11 +219,9 @@ def process_video_with_tracking(
             if not ret:
                 break
 
-            # вырезаем область
             frame_cropped = frame[y0_orig:y1_orig, x0_orig:x1_orig]
             frame_for_model = cv2.resize(frame_cropped, (imgsz_w, imgsz_h))
 
-            # inference
             results = model.track(
                 frame_for_model,
                 iou=0.4,
@@ -229,7 +232,6 @@ def process_video_with_tracking(
                 tracker="botsort.yaml",
             )
 
-            class_names = model.names
             boxes_obj = results[0].boxes
 
             if boxes_obj.id is not None:
@@ -264,7 +266,6 @@ def process_video_with_tracking(
                         1,
                     )
 
-            # область поиска
             if search_area_radius is not None:
                 current_radius = int(search_area_radius)
             else:
@@ -290,80 +291,63 @@ def process_video_with_tracking(
             )
 
             out.write(frame)
-            frame_count += 1
 
             if show_video:
                 disp_frame = cv2.resize(frame, (0, 0), fx=0.75, fy=0.75)
                 cv2.imshow("frame", disp_frame)
 
-            # Обновляем прогресс каждые 10 кадров (чтобы не спамить)
-            if (
-                tasks_status is not None
-                and task_id in tasks_status
-                and frame_count % 10 == 0
-            ):
-                tasks_status[task_id]["progress"] = int(
-                    (frame_count / total_frames) * 100
-                )
-                tasks_status[task_id]["status"] = "processing"
+            progress = int((frame_idx / total_frames) * 100)
+            tasks_status[task_id].update(
+                {
+                    "progress": progress,
+                    "message": f"Analyzing frame {frame_idx}/{total_frames}...",
+                }
+            )
 
         cap.release()
         out.release()
 
-        # --- Склейка со звуком через FFmpeg ---
-        tasks_status[task_id]["status"] = "finalizing"  # Статус для пользователя
-
+        # --- Merge in FFmpeg ---
+        tasks_status[task_id].update(
+            {"status": "merging", "message": "Merging audio and video..."}
+        )
         cmd = [
             "ffmpeg",
             "-y",
             "-i",
-            temp_output,  # Наше обработанное видео (без звука)
+            temp_output,
             "-i",
-            abs_input,  # Оригинальное видео (отсюда берем звук)
+            abs_input,
             "-c:v",
-            "libx264",  # Кодируем в H.264
+            "libx264",
             "-preset",
             "ultrafast",
             "-crf",
             "23",
             "-c:a",
-            "aac",  # Кодируем звук
+            "aac",
             "-map",
-            "0:v:0",  # Видео из первого файла
+            "0:v:0",
             "-map",
-            "1:a:0?",  # Аудио из второго
+            "1:a?",
             "-async",
-            "1",  # Синхронизация аудио по старту
+            "1",
             "-vsync",
-            "cfr",  # Принудительно Constant Frame Rate (синхронизирует кадры)
-            "-shortest",  # Обрезать по самому короткому потоку
+            "cfr",
+            "-shortest",
             abs_output,
         ]
 
         subprocess.run(cmd, check=True, capture_output=True)
 
-        # Удаляем временный файл без звука
+        # delete temp file
         if os.path.exists(temp_output):
             os.remove(temp_output)
 
-        tasks_status[task_id]["status"] = "done"
-        tasks_status[task_id]["progress"] = 100
+        tasks_status[task_id].update(
+            {"status": "done", "progress": 100, "message": "Done!"}
+        )
 
     except Exception as e:
         if tasks_status and task_id in tasks_status:
-            tasks_status[task_id]["status"] = "error"
-        print(f"Task {task_id} failed: {e}")
-
-
-if __name__ == "__main__":
-    process_video_with_tracking(
-        model_name="accurate",
-        input_path="test_videos/test2.mp4",
-        output_path="test_videos/test2_output.mp4",
-        task_id="test",
-        tasks_status={},
-        imgsz=640,
-        real_game_resolution=(1440, 1080),
-        show_video=True,
-        search_area_color=(255, 0, 255),
-    )
+            tasks_status[task_id].update({"status": "failed", "message": str(e)})
