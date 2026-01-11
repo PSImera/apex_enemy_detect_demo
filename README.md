@@ -1,10 +1,10 @@
 # Apex Legends Enemy Detector 🎯
 
-AI-powered tool to analyze gameplay videos, detect enemies using YOLOv11, and fix stretched resolution issues.
+AI-powered tool to analyze gameplay videos, detect enemies using YOLOv8, and fix stretched resolution issues.
 
 ## ✨ Features
 - **Smart Detection:** Center-focused search area for better performance.
-- **Stretched Res Support:** Corrects 4:3 stretched video to 16:9 for accurate AI inference.
+- **Stretched Res Support:** Corrects stretched video to 1:1 proportins for accurate AI inference.
 - **Audio Sync Fix:** Handles variable FPS and missing frames to keep audio in sync.
 - **Task Queue:** Asynchronous processing using FastAPI and Worker.
 
