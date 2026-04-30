@@ -1,0 +1,20 @@
+# Environment
+.venv/
+venv/
+env/
+.env
+
+__pycache__/
+*.pyc
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+tasks/
