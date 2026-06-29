@@ -1,10 +1,10 @@
 from ultralytics import YOLO
 from pathlib import Path
 
-BASE_DIR = Path(__file__).parent
+MODELS_DIR = Path(__file__).parent.parent / "models" / "apex_enemy_detect"
 MODELS = {
-    "fast": BASE_DIR / "models" / "apex_detect_v8n_v2.1.pt",
-    "accurate": BASE_DIR / "models" / "apex_detect_v8m_v2.1.pt",
+    "fast": MODELS_DIR / "apex_detect_v8n_v2.1.pt",
+    "accurate": MODELS_DIR / "apex_detect_v8m_v2.1.pt",
 }
 
 _model_cache = {}

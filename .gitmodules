@@ -1,0 +1,3 @@
+[submodule "models/apex_enemy_detect"]
+	path = models/apex_enemy_detect
+	url = https://huggingface.co/PSImera/apex_enemy_detect

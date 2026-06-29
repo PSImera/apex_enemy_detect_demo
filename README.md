@@ -1,6 +1,8 @@
 # Apex Legends Enemy Detector
 
-AI-powered tool to analyze gameplay videos, detect enemies using YOLOv8, and fix stretched resolution issues.
+> [Русская версия](README-RU.md)
+
+Demo app for reviewing YOLOv8 enemy detection results on Apex Legends gameplay videos. Upload a video, choose a model, and get a processed output with bounding boxes and optional stretched resolution fix.
 
 ![Python](https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white)
 ![YOLOv8](https://img.shields.io/badge/YOLOv8-Ultralytics-purple)
@@ -33,70 +35,34 @@ AI-powered tool to analyze gameplay videos, detect enemies using YOLOv8, and fix
 
 ## Models
 
-Two custom YOLOv8 models are included, both fine-tuned from Ultralytics COCO pretrained weights on a custom Apex Legends enemy dataset.
-
-### Training Setup
-
-| Parameter | Value |
-|---|---|
-| Dataset | `apex_detect_v2_p1_converted` |
-| Epochs | 200 (patience 100) |
-| Batch size | 16 |
-| Image size | 640×640 |
-| Optimizer | AdamW (lr=0.001) |
-| Augmentations | HSV (S/V ±0.3), horizontal flip (p=0.5), random erasing (p=0.4) |
-
-### Model Comparison
+Two custom YOLOv8 models hosted on HuggingFace: [PSImera/apex_enemy_detect](https://huggingface.co/PSImera/apex_enemy_detect).
 
 | | **YOLOv8n (nano)** | **YOLOv8m (medium)** |
 |---|---|---|
 | File | `apex_detect_v8n_v2.1.pt` | `apex_detect_v8m_v2.1.pt` |
 | Parameters | ~3.2M | ~25.9M |
-| Precision | 0.932 | 0.943 |
-| Recall | 0.877 | 0.883 |
 | mAP@50 | 0.930 | 0.938 |
 | mAP@50-95 | 0.756 | 0.796 |
-| Training time | ~5.0 h | ~5.8 h |
 | Better for | Speed / low-end GPU | Accuracy |
 
-> Metrics are from the final epoch (200) on the validation set.
-
-### Training Curves
-
-<table>
-<tr><th>YOLOv8n (nano)</th><th>YOLOv8m (medium)</th></tr>
-<tr>
-<td><img src="backend/models/apex_detect_v8n_v2.1/results.png"></td>
-<td><img src="backend/models/apex_detect_v8m_v2.1/results.png"></td>
-</tr>
-</table>
-
-### Precision-Recall Curves
-
-<table>
-<tr><th>YOLOv8n (nano)</th><th>YOLOv8m (medium)</th></tr>
-<tr>
-<td><img src="backend/models/apex_detect_v8n_v2.1/BoxPR_curve.png"></td>
-<td><img src="backend/models/apex_detect_v8m_v2.1/BoxPR_curve.png"></td>
-</tr>
-</table>
+Training details, metrics, and curves are available on the [model page](https://huggingface.co/PSImera/apex_enemy_detect).
 
 ---
 
 ## Requirements
 
-- **GPU with CUDA support** — required for real-time inference (NVIDIA recommended)
+- **GPU with CUDA support** — required for inference (NVIDIA recommended)
 - **CUDA 12.8** (or adjust the torch install URL for your version)
 - **Python 3.10+**
 - **ffmpeg** installed and available in `PATH`
 
 ---
 
-## 🛠️ Installation
+## Installation
 
-### 1. Clone the repo:
+### 1. Clone the repo with submodules:
 ```bash
-git clone https://github.com/PSImera/apex_enemy_detect_demo.git
+git clone --recurse-submodules https://github.com/PSImera/apex_enemy_detect_demo.git
 cd apex_enemy_detect_demo
 ```
 
@@ -108,7 +74,7 @@ python -m venv .venv
 
 **Linux / macOS:**
 ```bash
-source .venv/Scripts/activate
+source .venv/bin/activate
 ```
 
 **Windows (cmd):**
@@ -124,27 +90,22 @@ source .venv/Scripts/activate
 ### 3. Install dependencies
 
 ```bash
-python.exe -m pip install --upgrade pip
+python -m pip install --upgrade pip
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 pip install -r requirements.txt
 ```
 
 > Change the torch index URL if you use a different CUDA version than 12.8.
 
-#### System libraries
-
-- **ffmpeg** — video and audio processing
-- **freeglut3-dev**, **libgl1-mesa-dev**, **libglu1-mesa-dev** — OpenGL (Linux only)
-
-**Linux (Debian/Ubuntu):**
+**Linux (Debian/Ubuntu) — system libraries:**
 ```bash
 sudo apt update
 sudo apt install ffmpeg freeglut3-dev libgl1-mesa-dev libglu1-mesa-dev
 ```
 
-**Windows:**
+**Windows — ffmpeg:**
 
-Download ffmpeg from [ffmpeg.org/download.html](https://ffmpeg.org/download.html) and add `ffmpeg/bin` to your `PATH`.
+Download from [ffmpeg.org/download.html](https://ffmpeg.org/download.html) and add `ffmpeg/bin` to your `PATH`.
 
 ---
 
