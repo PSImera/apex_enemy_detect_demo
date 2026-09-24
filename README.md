@@ -187,7 +187,7 @@ source .venv/bin/activate
 
 ```bash
 python -m pip install --upgrade pip
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+pip install torch==2.9.1 torchvision==0.24.1 --index-url https://download.pytorch.org/whl/cu128
 pip install -r requirements.txt
 ```
 
