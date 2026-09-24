@@ -8,6 +8,7 @@ from fastapi import FastAPI, UploadFile, Form
 from fastapi.responses import FileResponse, JSONResponse
 
 from backend.worker import process_video_with_tracking
+from backend.models import BACKENDS, MODELS, engine_path
 
 app = FastAPI(title="Apex Enemy Detector API")
 
@@ -75,6 +76,12 @@ def hex_to_bgr(hex_color: str):
 async def upload_video(
     file: UploadFile,
     model_choice: str = Form(...),
+    backend: str = Form("torch"),
+    trt_half: str = Form("true"),
+    trt_workspace: str = Form("4.0"),
+    trt_force_rebuild: str = Form("false"),
+    conf: str = Form("0.5"),
+    iou: str = Form("0.4"),
     imgsz_w: str = Form("640"),
     imgsz_h: str = Form("640"),
     real_game_resolution: str = Form(None),
@@ -82,6 +89,11 @@ async def upload_video(
     search_area_radius: str = Form(None),
     fix_sync: str = Form("false"),
 ):
+    if backend not in BACKENDS:
+        return JSONResponse(
+            status_code=400, content={"error": f"Unknown backend: {backend}"}
+        )
+
     task_id = str(uuid.uuid4())
     task_dir = TASKS_DIR / task_id
     task_dir.mkdir(parents=True, exist_ok=True)
@@ -101,6 +113,12 @@ async def upload_video(
         "task_id": task_id,
         "params": {
             "model_choice": model_choice,
+            "backend": backend,
+            "trt_half": trt_half.lower() == "true",
+            "trt_workspace": float(trt_workspace),
+            "trt_force_rebuild": trt_force_rebuild.lower() == "true",
+            "conf": float(conf),
+            "iou": float(iou),
             "input_path": input_path,
             "output_path": output_path,
             "task_id": task_id,
@@ -116,6 +134,23 @@ async def upload_video(
     task_queue.put(task_params)
 
     return {"task_id": task_id}
+
+
+@app.get("/engine_status")
+async def get_engine_status(
+    model_choice: str,
+    imgsz_w: int = 640,
+    imgsz_h: int = 640,
+    trt_half: bool = True,
+):
+    if model_choice not in MODELS:
+        return JSONResponse(status_code=400, content={"error": "Unknown model"})
+
+    path = engine_path(model_choice, imgsz_w, imgsz_h, trt_half)
+    return {
+        "exists": path.exists(),
+        "path": str(path),
+    }
 
 
 @app.get("/status/{task_id}")

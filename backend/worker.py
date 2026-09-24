@@ -1,103 +1,63 @@
 import cv2
 import time
+import threading
+import torch
 import subprocess
 import os
 from pathlib import Path
+import statistics
 from collections import deque
 
-from backend.models import get_model
+from backend.drawing import (
+    class_color,
+    draw_boxes_gpu,
+    draw_fps,
+    draw_labels,
+    draw_rounded_rect,
+)
+from backend.models import (
+    ENGINE_BUILD_ESTIMATE_S,
+    engine_is_cached,
+    get_model,
+    prepare_engine,
+)
+from backend.tracking import tracker_yaml
 
 
-def draw_rounded_rect(
-    img, pt1, pt2, color, thickness=1, radius=15, alpha_fill=0.05, label=None
+def run_with_elapsed_progress(
+    fn, task_id, tasks_status, estimate_s, label, poll_s=1.0
 ):
-    """Draws a rounded rectangle with a translucent fill and a caption."""
-    overlay = img.copy()
-    x0, y0 = pt1
-    x1, y1 = pt2
+    result = {}
 
-    # --- fill ---
-    if radius > 0:
-        cv2.ellipse(
-            overlay, (x0 + radius, y0 + radius), (radius, radius), 180, 0, 90, color, -1
-        )
-        cv2.ellipse(
-            overlay, (x1 - radius, y0 + radius), (radius, radius), 270, 0, 90, color, -1
-        )
-        cv2.ellipse(
-            overlay, (x0 + radius, y1 - radius), (radius, radius), 90, 0, 90, color, -1
-        )
-        cv2.ellipse(
-            overlay, (x1 - radius, y1 - radius), (radius, radius), 0, 0, 90, color, -1
-        )
-        cv2.rectangle(overlay, (x0 + radius, y0), (x1 - radius, y1), color, -1)
-        cv2.rectangle(overlay, (x0, y0 + radius), (x1, y1 - radius), color, -1)
-    else:
-        cv2.rectangle(overlay, (x0, y0), (x1, y1), color, -1)
+    def _run():
+        try:
+            result["value"] = fn()
+        except BaseException as exc:
+            result["error"] = exc
 
-    # search area fill transperency
-    img = cv2.addWeighted(overlay, alpha_fill, img, 1 - alpha_fill, 0)
+    thread = threading.Thread(target=_run, daemon=True)
+    started = time.perf_counter()
+    thread.start()
 
-    # --- boarder ---
-    if radius > 0:
-        cv2.ellipse(
-            img,
-            (x0 + radius, y0 + radius),
-            (radius, radius),
-            180,
-            0,
-            90,
-            color,
-            thickness,
+    while thread.is_alive():
+        elapsed = time.perf_counter() - started
+        pct = min(int(elapsed / estimate_s * 100), 99)
+        remaining = max(estimate_s - elapsed, 0)
+        tasks_status[task_id].update(
+            {
+                "status": "building_engine",
+                "progress": pct,
+                "message": (
+                    f"{label} — {int(elapsed)}s elapsed, "
+                    f"~{int(remaining)}s left (one-off, then cached)"
+                ),
+            }
         )
-        cv2.ellipse(
-            img,
-            (x1 - radius, y0 + radius),
-            (radius, radius),
-            270,
-            0,
-            90,
-            color,
-            thickness,
-        )
-        cv2.ellipse(
-            img,
-            (x0 + radius, y1 - radius),
-            (radius, radius),
-            90,
-            0,
-            90,
-            color,
-            thickness,
-        )
-        cv2.ellipse(
-            img,
-            (x1 - radius, y1 - radius),
-            (radius, radius),
-            0,
-            0,
-            90,
-            color,
-            thickness,
-        )
-        cv2.line(img, (x0 + radius, y0), (x1 - radius, y0), color, thickness)
-        cv2.line(img, (x0 + radius, y1), (x1 - radius, y1), color, thickness)
-        cv2.line(img, (x0, y0 + radius), (x0, y1 - radius), color, thickness)
-        cv2.line(img, (x1, y0 + radius), (x1, y1 - radius), color, thickness)
-    else:
-        cv2.rectangle(img, pt1, pt2, color, thickness)
+        thread.join(timeout=poll_s)
 
-    # --- caption ---
-    if label:
-        font_scale = 0.5
-        font_thick = 1
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        text_size = cv2.getTextSize(label, font, font_scale, font_thick)[0]
-        text_x = x0 + (x1 - x0 - text_size[0]) // 2
-        text_y = y0 - 5
-        cv2.putText(img, label, (text_x, text_y), font, font_scale, color, font_thick)
-
-    return img
+    if "error" in result:
+        raise result["error"]
+    return result["value"]
 
 
 def process_video_with_tracking(
@@ -106,6 +66,12 @@ def process_video_with_tracking(
     output_path,
     task_id,
     tasks_status,
+    backend="torch",
+    trt_half=True,
+    trt_workspace=4.0,
+    trt_force_rebuild=False,
+    conf=0.5,
+    iou=0.4,
     imgsz_w=640,
     imgsz_h=640,
     real_game_resolution=None,
@@ -124,9 +90,7 @@ def process_video_with_tracking(
     )
 
     try:
-        # for fps
-        fps_window = deque(maxlen=30)
-        prev_time = time.perf_counter()
+        infer_window = deque(maxlen=30)
 
         if fix_sync:
             tasks_status[task_id].update(
@@ -166,7 +130,49 @@ def process_video_with_tracking(
         if not cap.isOpened():
             raise Exception("Error: Could not open video file.")
 
-        model = get_model(model_choice)
+        def _report(message):
+            tasks_status[task_id].update(
+                {"status": "building_engine", "message": message}
+            )
+
+        def _load_model():
+            if backend == "tensorrt":
+                return prepare_engine(
+                    model_choice,
+                    imgsz_w=imgsz_w,
+                    imgsz_h=imgsz_h,
+                    half=trt_half,
+                    workspace=trt_workspace,
+                    force_rebuild=trt_force_rebuild,
+                    progress_cb=_report,
+                )
+            return get_model(
+                model_choice,
+                backend=backend,
+                imgsz_w=imgsz_w,
+                imgsz_h=imgsz_h,
+                half=trt_half,
+                workspace=trt_workspace,
+                force_rebuild=trt_force_rebuild,
+                progress_cb=_report,
+            )
+
+        if backend == "tensorrt" and not engine_is_cached(
+            model_choice, imgsz_w, imgsz_h, trt_half, trt_force_rebuild
+        ):
+            model = run_with_elapsed_progress(
+                _load_model,
+                task_id,
+                tasks_status,
+                estimate_s=ENGINE_BUILD_ESTIMATE_S.get(model_choice, 300),
+                label=f"Building TensorRT engine for '{model_choice}'",
+            )
+        else:
+            model = _load_model()
+
+        tasks_status[task_id].update(
+            {"status": "processing", "message": "Model ready, analyzing video..."}
+        )
 
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         stretched_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -207,34 +213,79 @@ def process_video_with_tracking(
         final_crop_w = x1_orig - x0_orig
         final_crop_h = y1_orig - y0_orig
 
-        class_names = model.names
+        if backend == "tensorrt":
+            from backend.engine import FastDetector
+
+            class_names = {0: "enemy", 1: "mate"}
+            fast = FastDetector(
+                model,  # prepare_engine() returned the engine path
+                (x0_orig, y0_orig, x1_orig, y1_orig),
+                imgsz_w=imgsz_w,
+                imgsz_h=imgsz_h,
+                conf=conf,
+                iou=iou,
+                tracker_cfg=None,
+                frame_rate=max(1, video_fps),
+            )
+            gpu_colors = {
+                idx: torch.tensor(
+                    class_color(name), dtype=torch.uint8, device="cuda"
+                )
+                for idx, name in class_names.items()
+            }
+            box_scale = (final_crop_w / imgsz_w, final_crop_h / imgsz_h)
+            box_offset = (x0_orig, y0_orig)
+        else:
+            class_names = model.names
+
         for frame_idx in range(total_frames):
-
-            now = time.perf_counter()
-            fps_window.append(1.0 / (now - prev_time))
-            prev_time = now
-            fps_avg = sum(fps_window) / len(fps_window)
-
             ret, frame = cap.read()
             if not ret:
                 break
 
-            frame_cropped = frame[y0_orig:y1_orig, x0_orig:x1_orig]
-            frame_for_model = cv2.resize(frame_cropped, (imgsz_w, imgsz_h))
+            if backend == "tensorrt":
+                frame_gpu = torch.from_numpy(frame).cuda()
+                torch.cuda.synchronize()
 
-            results = model.track(
-                frame_for_model,
-                iou=0.4,
-                conf=0.5,
-                persist=True,
-                imgsz=(imgsz_w, imgsz_h),
-                verbose=False,
-                tracker="botsort.yaml",
-            )
+                infer_start = time.perf_counter()
+                rt_boxes, rt_ids, rt_cls = fast(frame_gpu)
+                draw_boxes_gpu(
+                    frame_gpu,
+                    rt_boxes,
+                    rt_ids,
+                    rt_cls,
+                    gpu_colors,
+                    box_scale,
+                    box_offset,
+                )
+                torch.cuda.synchronize()
+                infer_window.append(time.perf_counter() - infer_start)
+                frame = frame_gpu.cpu().numpy()
 
-            boxes_obj = results[0].boxes
+                # Labels are CPU work, deliberately outside the timed section.
+                draw_labels(
+                    frame, rt_boxes, rt_ids, rt_cls, class_names,
+                    box_scale, box_offset,
+                )
+                boxes_obj = None
+            else:
+                frame_cropped = frame[y0_orig:y1_orig, x0_orig:x1_orig]
+                frame_for_model = cv2.resize(frame_cropped, (imgsz_w, imgsz_h))
 
-            if boxes_obj.id is not None:
+                infer_start = time.perf_counter()
+                results = model.track(
+                    frame_for_model,
+                    iou=iou,
+                    conf=conf,
+                    persist=True,
+                    imgsz=(imgsz_w, imgsz_h),
+                    verbose=False,
+                    tracker=tracker_yaml(),
+                )
+                infer_window.append(time.perf_counter() - infer_start)
+                boxes_obj = results[0].boxes
+
+            if boxes_obj is not None and boxes_obj.id is not None:
                 boxes = boxes_obj.xyxy.cpu().numpy().astype(float)
                 ids = boxes_obj.id.cpu().numpy().astype(int)
                 clss = boxes_obj.cls.cpu().numpy().astype(int)
@@ -249,12 +300,7 @@ def process_video_with_tracking(
                     y1 = int(box[3] * scale_y_box) + y0_orig
 
                     name = class_names[cls]
-                    color = (255, 255, 255)
-                    if name == "enemy":
-                        color = (0, 0, 255)
-                    elif name == "mate":
-                        color = (0, 255, 0)
-
+                    color = class_color(name)
                     cv2.rectangle(frame, (x0, y0), (x1, y1), color, 1)
                     cv2.putText(
                         frame,
@@ -279,16 +325,8 @@ def process_video_with_tracking(
                 label="Search Area",
             )
 
-            # fps
-            cv2.putText(
-                frame,
-                f"FPS: {fps_avg:.1f}",
-                (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.9,
-                (0, 255, 255),
-                1,
-            )
+            infer_ms = statistics.median(infer_window) * 1000
+            draw_fps(frame, 1000.0 / infer_ms if infer_ms else 0.0)
 
             out.write(frame)
 

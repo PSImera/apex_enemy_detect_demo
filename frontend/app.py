@@ -30,9 +30,79 @@ model_choice = st.selectbox(
     format_func=lambda x: MODELS[x],
 )
 
+# ---------- INFERENCE BACKEND ----------
+BACKENDS = {
+    "torch": "PyTorch",
+    "tensorrt": "TensorRT",
+}
+
+backend = st.radio(
+    "Inference backend",
+    options=list(BACKENDS.keys()),
+    format_func=lambda x: BACKENDS[x],
+    horizontal=True,
+    help="""
+**PyTorch** runs the `.pt` checkpoint directly. No preparation, ~36 FPS.
+
+**TensorRT** runs a compiled engine with the frame kept on the GPU, ~290 FPS.
+The engine is built on first use (minutes) and cached in `models/engines/`;
+changing the model, Search Area size or precision triggers a rebuild. Engines
+are tied to your GPU and driver.
+
+The FPS counter reports real-time speed and excludes reading and writing the
+video, so saving the file takes longer than it suggests.
+""",
+)
+
 
 # ---------- SIDEBAR SETTINGS ----------
 st.sidebar.header("Settings")
+
+# --- TensorRT Engine ---
+trt_half = True
+trt_workspace = 4.0
+trt_force_rebuild = False
+
+if backend == "tensorrt":
+    st.sidebar.subheader(
+        "TensorRT Engine",
+        help="""
+**Engine build settings.**
+
+The engine is compiled once per *model + search area + precision* and cached in
+`models/engines/`. Reusing the same settings reuses the cached engine; changing
+any of them triggers a one-off rebuild for that new combination.
+""",
+    )
+
+    trt_precision = st.sidebar.radio(
+        "Precision",
+        options=["fp16", "fp32"],
+        horizontal=True,
+        help="**FP16** is roughly twice as fast and is the recommended default. "
+        "**FP32** is slightly more accurate but noticeably slower.",
+    )
+    trt_half = trt_precision == "fp16"
+
+    trt_workspace = st.sidebar.slider(
+        "Workspace (GiB)",
+        min_value=1.0,
+        max_value=8.0,
+        value=4.0,
+        step=1.0,
+        help="Memory TensorRT may use while optimizing the engine. "
+        "Larger values can find faster kernels but need more free VRAM. "
+        "Only affects build time, not inference.",
+    )
+
+    trt_force_rebuild = st.sidebar.checkbox(
+        "Force rebuild",
+        value=False,
+        help="Rebuild the engine even if a cached one exists. "
+        "Use after a GPU or driver change.",
+    )
+
+    st.sidebar.markdown("---")
 
 # --- Model Search Area ---
 st.sidebar.subheader(
@@ -118,6 +188,36 @@ real_game_resolution = (
     f"{int(game_width)}x{int(game_height)}" if game_width and game_height else None
 )
 
+st.sidebar.subheader(
+    "Detection",
+    help="""
+Thresholds applied to every backend.
+
+* **Confidence:** minimum score for a detection to count. Lower values catch
+  more distant enemies but start picking up trees and rocks.
+* **NMS IoU:** how much two boxes may overlap before the weaker one is dropped.
+""",
+)
+
+conf_col, iou_col = st.sidebar.columns(2)
+with conf_col:
+    conf = st.number_input(
+        "Confidence",
+        min_value=0.05,
+        max_value=0.95,
+        value=0.50,
+        step=0.05,
+    )
+with iou_col:
+    iou = st.number_input(
+        "NMS IoU",
+        min_value=0.1,
+        max_value=0.9,
+        value=0.40,
+        step=0.05,
+    )
+
+
 st.sidebar.markdown("---")
 fix_sync = st.sidebar.checkbox(
     "Fix Audio Sync",
@@ -125,6 +225,39 @@ fix_sync = st.sidebar.checkbox(
     help="Enable this if your audio goes out of sync with video. "
     "Adds extra processing time at the start.",
 )
+
+# Warn if the chosen TensorRT combo still needs a build
+if backend == "tensorrt":
+    try:
+        engine_info = requests.get(
+            f"{BACKEND_URL}/engine_status",
+            params={
+                "model_choice": model_choice,
+                "imgsz_w": int(imgsz_w),
+                "imgsz_h": int(imgsz_h),
+                "trt_half": trt_half,
+            },
+            timeout=5,
+        ).json()
+        if trt_force_rebuild:
+            st.warning(
+                "♻️ Force rebuild is on — the engine will be "
+                "rebuilt even though a cached one may exist."
+            )
+        elif engine_info.get("exists"):
+            st.success(
+                f"⚡ Cached TensorRT engine ready "
+                f"({model_choice}, {imgsz_w}x{imgsz_h}, {trt_precision}) — "
+                "inference will reuse it."
+            )
+        else:
+            st.info(
+                f"⚙️ No cached engine for {model_choice} at "
+                f"{imgsz_w}x{imgsz_h} ({trt_precision}) yet. It will be built "
+                "on the first run (several minutes), then reused."
+            )
+    except Exception:
+        st.caption("Could not reach backend to check engine cache.")
 
 # Upload and show video
 uploaded_file = st.file_uploader(
@@ -142,6 +275,12 @@ if st.button("Detect", disabled=uploaded_file is None):
     files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
     data = {
         "model_choice": model_choice,
+        "backend": backend,
+        "trt_half": trt_half,
+        "trt_workspace": trt_workspace,
+        "trt_force_rebuild": trt_force_rebuild,
+        "conf": conf,
+        "iou": iou,
         "imgsz_w": imgsz_w,
         "imgsz_h": imgsz_h,
         "real_game_resolution": real_game_resolution,
@@ -174,7 +313,10 @@ if st.button("Detect", disabled=uploaded_file is None):
                         progress = status_res.get("progress", 0)
                         message = status_res.get("message", "Waiting...")
 
-                        if state == "repairing":
+                        if state == "building_engine":
+                            status_text.warning(f"⚙️ {message}")
+                            progress_bar.progress(progress)
+                        elif state == "repairing":
                             status_text.warning(f"🛠️ **Repairing:** {message}")
                             progress_bar.progress(progress)
                         elif state == "processing":
@@ -238,6 +380,11 @@ if st.session_state.processed_video:
     st.markdown("---")
     st.subheader("Result Video")
     st.video(st.session_state.processed_video)
+    st.caption(
+        "ℹ️ **The FPS counter shows real-time speed** — detection and "
+        "tracking only. Reading and writing the video file belong to this demo, "
+        "not to the model, so they are excluded."
+    )
     st.download_button(
         label="⬇️ Download result",
         data=st.session_state.processed_video,

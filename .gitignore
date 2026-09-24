@@ -18,3 +18,8 @@ __pycache__/
 Thumbs.db
 
 tasks/
+
+# TensorRT:
+models/engines/
+*.engine
+*.onnx
