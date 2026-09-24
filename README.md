@@ -82,6 +82,13 @@ would sustain driving a live source on this GPU. Reading and writing the video
 file belong to this demo, not to the model, so they are excluded. Saving the
 result therefore takes longer than the counter suggests — that is expected.
 
+That overhead is still kept small. Frames are piped into ffmpeg and encoded with
+**NVENC** (`h264_nvenc`, falling back to `libx264` if the encoder is
+unavailable), so the audio merge that follows copies the video stream instead of
+re-encoding it — previously every frame went through a software encoder twice.
+The Search Area frame is identical on every frame, so it is rasterised once and
+composited from a cached layer (6.1 → 0.69 ms per frame) rather than redrawn.
+
 ### Why TensorRT is so much faster
 
 At one frame at a time, YOLO inference is **launch-bound**: the GPU finishes

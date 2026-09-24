@@ -22,6 +22,7 @@ from backend.models import (
     prepare_engine,
 )
 from backend.tracking import tracker_yaml
+from backend.video import FrameWriter
 
 
 def run_with_elapsed_progress(
@@ -88,6 +89,9 @@ def process_video_with_tracking(
     tasks_status[task_id].update(
         {"status": "starting", "result": abs_output, "progress": 0}
     )
+
+    cap = None
+    out = None
 
     try:
         infer_window = deque(maxlen=30)
@@ -178,10 +182,9 @@ def process_video_with_tracking(
         stretched_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         stretched_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
         video_fps = int(cap.get(cv2.CAP_PROP_FPS))
-        out = cv2.VideoWriter(
-            temp_output, fourcc, video_fps, (stretched_width, stretched_height)
+        out = FrameWriter(
+            temp_output, stretched_width, stretched_height, video_fps
         )
 
         # for stretched
@@ -343,7 +346,9 @@ def process_video_with_tracking(
             )
 
         cap.release()
+        cap = None
         out.release()
+        out = None
 
         # --- Merge in FFmpeg ---
         tasks_status[task_id].update(
@@ -357,21 +362,13 @@ def process_video_with_tracking(
             "-i",
             abs_input,
             "-c:v",
-            "libx264",
-            "-preset",
-            "ultrafast",
-            "-crf",
-            "23",
+            "copy",
             "-c:a",
             "aac",
             "-map",
             "0:v:0",
             "-map",
             "1:a?",
-            "-async",
-            "1",
-            "-vsync",
-            "cfr",
             "-shortest",
             abs_output,
         ]
@@ -389,3 +386,11 @@ def process_video_with_tracking(
     except Exception as e:
         if tasks_status and task_id in tasks_status:
             tasks_status[task_id].update({"status": "failed", "message": str(e)})
+    finally:
+        if out is not None:
+            try:
+                out.release()
+            except Exception:
+                pass
+        if cap is not None:
+            cap.release()
