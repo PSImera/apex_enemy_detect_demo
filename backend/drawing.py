@@ -172,3 +172,54 @@ def draw_boxes_gpu(frame_gpu, boxes, ids, cls, class_colors, scale, offset, thic
         frame_gpu[y0:y1, max(x1 - t, 0) : x1] = color
 
     return frame_gpu
+
+
+class SearchAreaOverlay:
+    def __init__(self, shape, pt1, pt2, color, thickness=1, radius=15,
+                 alpha_fill=0.05, label=None):
+        h, w = shape[:2]
+
+        filled = draw_rounded_rect(
+            np.zeros((h, w, 3), np.uint8), pt1, pt2, color,
+            thickness, radius, alpha_fill=1.0, label=label,
+        )
+        strokes = draw_rounded_rect(
+            np.zeros((h, w, 3), np.uint8), pt1, pt2, color,
+            thickness, radius, alpha_fill=0.0, label=label,
+        )
+
+        opaque = strokes.any(axis=2)
+        touched = filled.any(axis=2) | opaque
+
+        ys, xs = np.nonzero(touched)
+        if len(ys) == 0:
+            self.roi = None
+            return
+
+        y0, y1 = int(ys.min()), int(ys.max()) + 1
+        x0, x1 = int(xs.min()), int(xs.max()) + 1
+        self.roi = (y0, y1, x0, x1)
+        self.alpha = float(alpha_fill)
+
+        self.fill = np.ascontiguousarray(filled[y0:y1, x0:x1])
+        self.strokes = np.ascontiguousarray(strokes[y0:y1, x0:x1])
+        self.fill_mask = np.ascontiguousarray(
+            (filled[y0:y1, x0:x1].any(axis=2) * 255).astype(np.uint8)
+        )
+        self.stroke_mask = np.ascontiguousarray((opaque[y0:y1, x0:x1] * 255).astype(np.uint8))
+        self._buf = np.empty_like(self.fill)
+
+    def apply(self, frame):
+        if self.roi is None:
+            return frame
+
+        y0, y1, x0, x1 = self.roi
+        region = frame[y0:y1, x0:x1]
+
+        cv2.addWeighted(
+            self.fill, self.alpha, region, 1.0 - self.alpha, 0, dst=self._buf
+        )
+        cv2.copyTo(self._buf, self.fill_mask, dst=region)
+        cv2.copyTo(self.strokes, self.stroke_mask, dst=region)
+
+        return frame

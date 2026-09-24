@@ -9,11 +9,11 @@ import statistics
 from collections import deque
 
 from backend.drawing import (
+    SearchAreaOverlay,
     class_color,
     draw_boxes_gpu,
     draw_fps,
     draw_labels,
-    draw_rounded_rect,
 )
 from backend.models import (
     ENGINE_BUILD_ESTIMATE_S,
@@ -241,6 +241,19 @@ def process_video_with_tracking(
         else:
             class_names = model.names
 
+        if search_area_radius is not None:
+            overlay_radius = int(search_area_radius)
+        else:
+            overlay_radius = int(min(final_crop_w, final_crop_h) // 2)
+        search_overlay = SearchAreaOverlay(
+            (stretched_height, stretched_width),
+            (x0_orig, y0_orig),
+            (x1_orig, y1_orig),
+            search_area_color,
+            radius=overlay_radius,
+            label="Search Area",
+        )
+
         for frame_idx in range(total_frames):
             ret, frame = cap.read()
             if not ret:
@@ -315,18 +328,7 @@ def process_video_with_tracking(
                         1,
                     )
 
-            if search_area_radius is not None:
-                current_radius = int(search_area_radius)
-            else:
-                current_radius = int(min(final_crop_w, final_crop_h) // 2)
-            frame = draw_rounded_rect(
-                frame,
-                (x0_orig, y0_orig),
-                (x1_orig, y1_orig),
-                search_area_color,
-                radius=current_radius,
-                label="Search Area",
-            )
+            search_overlay.apply(frame)
 
             infer_ms = statistics.median(infer_window) * 1000
             draw_fps(frame, 1000.0 / infer_ms if infer_ms else 0.0)
