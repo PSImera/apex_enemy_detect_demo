@@ -3,7 +3,18 @@ from __future__ import annotations
 import subprocess
 
 
+_nvenc_cache = None
+
+
 def nvenc_available() -> bool:
+    global _nvenc_cache
+    if _nvenc_cache is not None:
+        return _nvenc_cache
+    _nvenc_cache = _probe_nvenc()
+    return _nvenc_cache
+
+
+def _probe_nvenc() -> bool:
     try:
         listed = subprocess.run(
             ["ffmpeg", "-hide_banner", "-encoders"],

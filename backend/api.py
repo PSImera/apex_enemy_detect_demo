@@ -57,6 +57,22 @@ def cleanup_old_tasks():
 threading.Thread(target=cleanup_old_tasks, daemon=True).start()
 
 
+def prewarm():
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            torch.zeros(1, device="cuda")
+        from backend.video import nvenc_available
+
+        nvenc_available()
+    except Exception as exc:
+        print(f"Prewarm skipped: {exc}")
+
+
+threading.Thread(target=prewarm, daemon=True).start()
+
+
 def parse_resolution(value):
     if not value:
         return None

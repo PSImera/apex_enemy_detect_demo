@@ -1,4 +1,5 @@
 import cv2
+import numpy as np
 import time
 import threading
 import torch
@@ -175,7 +176,7 @@ def process_video_with_tracking(
             model = _load_model()
 
         tasks_status[task_id].update(
-            {"status": "processing", "message": "Model ready, analyzing video..."}
+            {"status": "processing", "message": "Preparing encoder..."}
         )
 
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -218,10 +219,16 @@ def process_video_with_tracking(
 
         if backend == "tensorrt":
             from backend.engine import FastDetector
+            tasks_status[task_id].update(
+                {
+                    "status": "processing",
+                    "message": "Capturing CUDA graph and warming up the engine...",
+                }
+            )
 
             class_names = {0: "enemy", 1: "mate"}
             fast = FastDetector(
-                model,  # prepare_engine() returned the engine path
+                model,
                 (x0_orig, y0_orig, x1_orig, y1_orig),
                 imgsz_w=imgsz_w,
                 imgsz_h=imgsz_h,
@@ -254,6 +261,24 @@ def process_video_with_tracking(
             label="Search Area",
         )
 
+        if backend != "tensorrt":
+            tasks_status[task_id].update(
+                {"status": "processing", "message": "Warming up the model..."}
+            )
+            model.track(
+                np.zeros((imgsz_h, imgsz_w, 3), dtype=np.uint8),
+                iou=iou,
+                conf=conf,
+                persist=False,
+                imgsz=(imgsz_w, imgsz_h),
+                verbose=False,
+                tracker=tracker_yaml(),
+            )
+
+        tasks_status[task_id].update(
+            {"status": "processing", "message": "Model ready, analyzing video..."}
+        )
+
         for frame_idx in range(total_frames):
             ret, frame = cap.read()
             if not ret:
@@ -278,7 +303,6 @@ def process_video_with_tracking(
                 infer_window.append(time.perf_counter() - infer_start)
                 frame = frame_gpu.cpu().numpy()
 
-                # Labels are CPU work, deliberately outside the timed section.
                 draw_labels(
                     frame, rt_boxes, rt_ids, rt_cls, class_names,
                     box_scale, box_offset,

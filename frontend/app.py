@@ -20,12 +20,20 @@ st.write("Upload a gameplay video and choose detection model")
 
 try:
     gpu_status = requests.get(f"{BACKEND_URL}/cuda_status", timeout=5).json()
+    backend_up = True
 except Exception:
-    gpu_status = {"available": True, "message": "", "device": None}
-    st.caption("Could not reach backend to check for a GPU.")
+    gpu_status = {"available": False, "message": "", "device": None}
+    backend_up = False
 
-gpu_ready = bool(gpu_status.get("available"))
-if not gpu_ready:
+gpu_ready = backend_up and bool(gpu_status.get("available"))
+
+if not backend_up:
+    st.error(
+        f"🔌 Backend is not running at {BACKEND_URL}. Start it with "
+        "`uvicorn backend.api:app --host 127.0.0.1 --port 8000`, then reload "
+        "this page."
+    )
+elif not gpu_ready:
     st.error(
         f"🚫 {gpu_status.get('message', 'No CUDA device found.')} "
         "An NVIDIA GPU with CUDA is required. You can still browse the settings, "
