@@ -146,7 +146,9 @@ your specific GPU and driver, so they are always built locally and never committ
 
 ## Requirements
 
-- **GPU with CUDA support** — required for inference (NVIDIA recommended)
+- **NVIDIA GPU with CUDA** — required; there is no CPU fallback. Both backends
+  move the model to `cuda`, and the app checks for a device on startup and
+  refuses to process video without one.
 - **CUDA 12.8** (or adjust the torch install URL for your version)
 - **Python 3.10+**
 - **ffmpeg** installed and available in `PATH`

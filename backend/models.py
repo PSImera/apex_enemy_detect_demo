@@ -2,6 +2,8 @@ from ultralytics import YOLO
 from pathlib import Path
 import threading
 
+import torch
+
 MODELS_DIR = Path(__file__).parent.parent / "models" / "apex_enemy_detect"
 # Engine cache lives inside the project and is gitignored.
 ENGINES_DIR = Path(__file__).parent.parent / "models" / "engines"
@@ -19,6 +21,33 @@ ENGINE_BUILD_ESTIMATE_S = {
 
 _model_cache = {}
 _build_lock = threading.Lock()
+
+
+def cuda_status():
+    if torch.cuda.is_available():
+        name = torch.cuda.get_device_name(0)
+        return {"available": True, "device": name, "message": f"CUDA ready: {name}"}
+
+    if not torch.version.cuda:
+        reason = "this torch build has no CUDA support (reinstall from requirements.txt)"
+    else:
+        reason = "no NVIDIA GPU or driver was found"
+
+    return {
+        "available": False,
+        "device": None,
+        "message": (
+            f"No CUDA device: {reason}. This demo is GPU-only — on the CPU "
+            "detection would crawl at a few frames per second, which defeats the "
+            "point of it, so processing is disabled."
+        ),
+    }
+
+
+def require_cuda():
+    status = cuda_status()
+    if not status["available"]:
+        raise RuntimeError(status["message"])
 
 
 def engine_path(model_choice: str, imgsz_w: int, imgsz_h: int, half: bool = True):
@@ -50,6 +79,7 @@ def build_engine(
 ):
     if model_choice not in MODELS:
         raise ValueError(f"Unknown model: {model_choice}")
+    require_cuda()
 
     target = engine_path(model_choice, imgsz_w, imgsz_h, half)
 
@@ -123,6 +153,7 @@ def get_model(
         raise ValueError(f"Unknown model: {model_choice}")
     if backend not in BACKENDS:
         raise ValueError(f"Unknown backend: {backend}")
+    require_cuda()
 
     if backend == "torch":
         cache_key = ("torch", model_choice)

@@ -8,7 +8,7 @@ from fastapi import FastAPI, UploadFile, Form
 from fastapi.responses import FileResponse, JSONResponse
 
 from backend.worker import process_video_with_tracking
-from backend.models import BACKENDS, MODELS, engine_path
+from backend.models import BACKENDS, MODELS, cuda_status, engine_path
 
 app = FastAPI(title="Apex Enemy Detector API")
 
@@ -72,6 +72,12 @@ def hex_to_bgr(hex_color: str):
     return (b, g, r)
 
 
+@app.get("/cuda_status")
+async def get_cuda_status():
+    """Tell the frontend whether a usable GPU is present."""
+    return cuda_status()
+
+
 @app.post("/upload")
 async def upload_video(
     file: UploadFile,
@@ -93,6 +99,10 @@ async def upload_video(
         return JSONResponse(
             status_code=400, content={"error": f"Unknown backend: {backend}"}
         )
+
+    gpu = cuda_status()
+    if not gpu["available"]:
+        return JSONResponse(status_code=503, content={"error": gpu["message"]})
 
     task_id = str(uuid.uuid4())
     task_dir = TASKS_DIR / task_id

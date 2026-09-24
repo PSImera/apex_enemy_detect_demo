@@ -18,6 +18,20 @@ st.set_page_config(
 st.title("Apex enemy detector [Demo]")
 st.write("Upload a gameplay video and choose detection model")
 
+try:
+    gpu_status = requests.get(f"{BACKEND_URL}/cuda_status", timeout=5).json()
+except Exception:
+    gpu_status = {"available": True, "message": "", "device": None}
+    st.caption("Could not reach backend to check for a GPU.")
+
+gpu_ready = bool(gpu_status.get("available"))
+if not gpu_ready:
+    st.error(
+        f"🚫 {gpu_status.get('message', 'No CUDA device found.')} "
+        "An NVIDIA GPU with CUDA is required. You can still browse the settings, "
+        "but processing is disabled."
+    )
+
 # ---------- MODEL CHOICE ----------
 MODELS = {
     "accurate": "Accurate (YOLOv8m) — better quality",
@@ -270,7 +284,7 @@ if uploaded_file:
     st.video(uploaded_file)
 
 # Start detection button
-if st.button("Detect", disabled=uploaded_file is None):
+if st.button("Detect", disabled=uploaded_file is None or not gpu_ready):
     st.session_state.processed_video = None
     files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
     data = {
